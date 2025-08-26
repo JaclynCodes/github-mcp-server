@@ -881,6 +881,179 @@ func CreateIssue(getClient GetClientFn, t translations.TranslationHelperFunc) (t
 		}
 }
 
+// CreateSubIssue creates a tool to create a new issue and automatically add it as a sub-issue to a parent issue.
+func CreateSubIssue(getClient GetClientFn, t translations.TranslationHelperFunc) (tool mcp.Tool, handler server.ToolHandlerFunc) {
+	return mcp.NewTool("create_sub_issue",
+			mcp.WithDescription(t("TOOL_CREATE_SUB_ISSUE_DESCRIPTION", "Create a new issue and automatically add it as a sub-issue to a parent issue in a GitHub repository.")),
+			mcp.WithToolAnnotation(mcp.ToolAnnotation{
+				Title:        t("TOOL_CREATE_SUB_ISSUE_USER_TITLE", "Create sub-issue"),
+				ReadOnlyHint: ToBoolPtr(false),
+			}),
+			mcp.WithString("owner",
+				mcp.Required(),
+				mcp.Description("Repository owner"),
+			),
+			mcp.WithString("repo",
+				mcp.Required(),
+				mcp.Description("Repository name"),
+			),
+			mcp.WithNumber("parent_issue_number",
+				mcp.Required(),
+				mcp.Description("The number of the parent issue"),
+			),
+			mcp.WithString("title",
+				mcp.Required(),
+				mcp.Description("Issue title"),
+			),
+			mcp.WithString("body",
+				mcp.Description("Issue body content"),
+			),
+			mcp.WithArray("assignees",
+				mcp.Description("Usernames to assign to this issue"),
+				mcp.Items(
+					map[string]any{
+						"type": "string",
+					},
+				),
+			),
+			mcp.WithArray("labels",
+				mcp.Description("Labels to apply to this issue"),
+				mcp.Items(
+					map[string]any{
+						"type": "string",
+					},
+				),
+			),
+			mcp.WithNumber("milestone",
+				mcp.Description("Milestone number"),
+			),
+			mcp.WithString("type",
+				mcp.Description("Type of this issue"),
+			),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			owner, err := RequiredParam[string](request, "owner")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			repo, err := RequiredParam[string](request, "repo")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			parentIssueNumber, err := RequiredInt(request, "parent_issue_number")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			title, err := RequiredParam[string](request, "title")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Optional parameters
+			body, err := OptionalParam[string](request, "body")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get assignees
+			assignees, err := OptionalStringArrayParam(request, "assignees")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get labels
+			labels, err := OptionalStringArrayParam(request, "labels")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			// Get optional milestone
+			milestone, err := OptionalIntParam(request, "milestone")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			var milestoneNum *int
+			if milestone != 0 {
+				milestoneNum = &milestone
+			}
+
+			// Get optional type
+			issueType, err := OptionalParam[string](request, "type")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			client, err := getClient(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get GitHub client: %w", err)
+			}
+
+			// Step 1: Create the issue
+			issueRequest := &github.IssueRequest{
+				Title:     github.Ptr(title),
+				Body:      github.Ptr(body),
+				Assignees: &assignees,
+				Labels:    &labels,
+				Milestone: milestoneNum,
+			}
+
+			if issueType != "" {
+				issueRequest.Type = github.Ptr(issueType)
+			}
+
+			issue, resp, err := client.Issues.Create(ctx, owner, repo, issueRequest)
+			if err != nil {
+				return ghErrors.NewGitHubAPIErrorResponse(ctx,
+					"failed to create issue",
+					resp,
+					err,
+				), nil
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusCreated {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read response body: %w", err)
+				}
+				return mcp.NewToolResultError(fmt.Sprintf("failed to create issue: %s", string(body))), nil
+			}
+
+			// Step 2: Add the created issue as a sub-issue to the parent
+			subIssueRequest := github.SubIssueRequest{
+				SubIssueID:    *issue.ID,
+				ReplaceParent: ToBoolPtr(false), // Default to not replacing existing parent
+			}
+
+			_, resp2, err := client.SubIssue.Add(ctx, owner, repo, int64(parentIssueNumber), subIssueRequest)
+			if err != nil {
+				return ghErrors.NewGitHubAPIErrorResponse(ctx,
+					"failed to add issue as sub-issue (issue was created successfully)",
+					resp2,
+					err,
+				), nil
+			}
+			defer func() { _ = resp2.Body.Close() }()
+
+			if resp2.StatusCode != http.StatusCreated {
+				body, err := io.ReadAll(resp2.Body)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read response body: %w", err)
+				}
+				return mcp.NewToolResultError(fmt.Sprintf("failed to add issue as sub-issue (issue was created successfully): %s", string(body))), nil
+			}
+
+			// Return the created issue (not the parent issue)
+			r, err := json.Marshal(issue)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal response: %w", err)
+			}
+
+			return mcp.NewToolResultText(string(r)), nil
+		}
+}
+
 // ListIssues creates a tool to list and filter repository issues
 func ListIssues(getGQLClient GetGQLClientFn, t translations.TranslationHelperFunc) (tool mcp.Tool, handler server.ToolHandlerFunc) {
 	return mcp.NewTool("list_issues",

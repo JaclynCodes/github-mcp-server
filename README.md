@@ -536,6 +536,17 @@ The following sets of tools are available (all are on by default):
   - `title`: Issue title (string, required)
   - `type`: Type of this issue (string, optional)
 
+- **create_sub_issue** - Create sub-issue
+  - `assignees`: Usernames to assign to this issue (string[], optional)
+  - `body`: Issue body content (string, optional)
+  - `labels`: Labels to apply to this issue (string[], optional)
+  - `milestone`: Milestone number (number, optional)
+  - `owner`: Repository owner (string, required)
+  - `parent_issue_number`: The number of the parent issue (number, required)
+  - `repo`: Repository name (string, required)
+  - `title`: Issue title (string, required)
+  - `type`: Type of this issue (string, optional)
+
 - **get_issue** - Get issue details
   - `issue_number`: The number of the issue (number, required)
   - `owner`: The owner of the repository (string, required)

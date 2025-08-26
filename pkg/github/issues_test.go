@@ -2989,3 +2989,206 @@ func Test_ListIssueTypes(t *testing.T) {
 		})
 	}
 }
+func Test_CreateSubIssue(t *testing.T) {
+	// Verify tool definition once
+	mockClient := github.NewClient(nil)
+	tool, _ := CreateSubIssue(stubGetClientFn(mockClient), translations.NullTranslationHelper)
+	require.NoError(t, toolsnaps.Test(tool.Name, tool))
+
+	assert.Equal(t, "create_sub_issue", tool.Name)
+	assert.NotEmpty(t, tool.Description)
+	assert.Contains(t, tool.InputSchema.Properties, "owner")
+	assert.Contains(t, tool.InputSchema.Properties, "repo")
+	assert.Contains(t, tool.InputSchema.Properties, "parent_issue_number")
+	assert.Contains(t, tool.InputSchema.Properties, "title")
+	assert.Contains(t, tool.InputSchema.Properties, "body")
+	assert.Contains(t, tool.InputSchema.Properties, "assignees")
+	assert.Contains(t, tool.InputSchema.Properties, "labels")
+	assert.Contains(t, tool.InputSchema.Properties, "milestone")
+	assert.Contains(t, tool.InputSchema.Properties, "type")
+	assert.ElementsMatch(t, tool.InputSchema.Required, []string{"owner", "repo", "parent_issue_number", "title"})
+
+	// Setup mock issue for success case (matches GitHub API response format)
+	mockIssue := &github.Issue{
+		Number:  github.Ptr(45),
+		ID:      github.Ptr(int64(12345)),
+		Title:   github.Ptr("New Sub Issue"),
+		Body:    github.Ptr("This is a new sub-issue"),
+		State:   github.Ptr("open"),
+		HTMLURL: github.Ptr("https://github.com/owner/repo/issues/45"),
+		User: &github.User{
+			Login: github.Ptr("testuser"),
+		},
+		Labels: []*github.Label{
+			{
+				Name:        github.Ptr("enhancement"),
+				Color:       github.Ptr("84b6eb"),
+				Description: github.Ptr("New feature or request"),
+			},
+		},
+	}
+
+	// Setup mock parent issue for sub-issue response
+	mockParentIssue := &github.Issue{
+		Number:  github.Ptr(42),
+		Title:   github.Ptr("Parent Issue"),
+		Body:    github.Ptr("This is the parent issue with a sub-issue"),
+		State:   github.Ptr("open"),
+		HTMLURL: github.Ptr("https://github.com/owner/repo/issues/42"),
+		User: &github.User{
+			Login: github.Ptr("testuser"),
+		},
+	}
+
+	tests := []struct {
+		name           string
+		mockedClient   *http.Client
+		requestArgs    map[string]interface{}
+		expectError    bool
+		expectedIssue  *github.Issue
+		expectedErrMsg string
+	}{
+		{
+			name: "successful sub-issue creation with all parameters",
+			mockedClient: mock.NewMockedHTTPClient(
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesByOwnerByRepo,
+					mockResponse(t, http.StatusCreated, mockIssue),
+				),
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesSubIssuesByOwnerByRepoByIssueNumber,
+					mockResponse(t, http.StatusCreated, mockParentIssue),
+				),
+			),
+			requestArgs: map[string]interface{}{
+				"owner":               "owner",
+				"repo":                "repo",
+				"parent_issue_number": float64(42),
+				"title":               "New Sub Issue",
+				"body":                "This is a new sub-issue",
+				"assignees":           []interface{}{"testuser"},
+				"labels":              []interface{}{"enhancement"},
+				"milestone":           float64(1),
+				"type":                "feature",
+			},
+			expectError:   false,
+			expectedIssue: mockIssue,
+		},
+		{
+			name: "successful sub-issue creation with minimal parameters",
+			mockedClient: mock.NewMockedHTTPClient(
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesByOwnerByRepo,
+					mockResponse(t, http.StatusCreated, mockIssue),
+				),
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesSubIssuesByOwnerByRepoByIssueNumber,
+					mockResponse(t, http.StatusCreated, mockParentIssue),
+				),
+			),
+			requestArgs: map[string]interface{}{
+				"owner":               "owner",
+				"repo":                "repo",
+				"parent_issue_number": float64(42),
+				"title":               "New Sub Issue",
+			},
+			expectError:   false,
+			expectedIssue: mockIssue,
+		},
+		{
+			name: "issue creation fails",
+			mockedClient: mock.NewMockedHTTPClient(
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesByOwnerByRepo,
+					mockResponse(t, http.StatusUnprocessableEntity, `{"message": "Validation failed", "errors": [{"message": "Title is required"}]}`),
+				),
+			),
+			requestArgs: map[string]interface{}{
+				"owner":               "owner",
+				"repo":                "repo",
+				"parent_issue_number": float64(42),
+				"title":               "Valid Title",
+			},
+			expectError:    false,
+			expectedErrMsg: "failed to create issue",
+		},
+		{
+			name: "sub-issue addition fails after successful issue creation",
+			mockedClient: mock.NewMockedHTTPClient(
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesByOwnerByRepo,
+					mockResponse(t, http.StatusCreated, mockIssue),
+				),
+				mock.WithRequestMatchHandler(
+					mock.PostReposIssuesSubIssuesByOwnerByRepoByIssueNumber,
+					mockResponse(t, http.StatusNotFound, `{"message": "Parent issue not found"}`),
+				),
+			),
+			requestArgs: map[string]interface{}{
+				"owner":               "owner",
+				"repo":                "repo",
+				"parent_issue_number": float64(999),
+				"title":               "New Sub Issue",
+			},
+			expectError:    false,
+			expectedErrMsg: "failed to add issue as sub-issue (issue was created successfully)",
+		},
+		{
+			name:         "missing required parameter",
+			mockedClient: mock.NewMockedHTTPClient(
+			// No mocked requests needed since validation fails before HTTP call
+			),
+			requestArgs: map[string]interface{}{
+				"owner": "owner",
+				"repo":  "repo",
+				"title": "New Sub Issue",
+			},
+			expectError:    false,
+			expectedErrMsg: "missing required parameter: parent_issue_number",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Setup client with mock
+			client := github.NewClient(tc.mockedClient)
+			_, handler := CreateSubIssue(stubGetClientFn(client), translations.NullTranslationHelper)
+
+			// Create call request
+			request := createMCPRequest(tc.requestArgs)
+
+			// Call handler
+			result, err := handler(context.Background(), request)
+
+			// Verify results
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.expectedErrMsg)
+				return
+			}
+
+			if tc.expectedErrMsg != "" {
+				require.NotNil(t, result)
+				textContent := getTextResult(t, result)
+				assert.Contains(t, textContent.Text, tc.expectedErrMsg)
+				return
+			}
+
+			require.NoError(t, err)
+
+			// Parse the result and get the text content if no error
+			textContent := getTextResult(t, result)
+
+			// Unmarshal and verify the result
+			var returnedIssue github.Issue
+			err = json.Unmarshal([]byte(textContent.Text), &returnedIssue)
+			require.NoError(t, err)
+			assert.Equal(t, *tc.expectedIssue.Number, *returnedIssue.Number)
+			assert.Equal(t, *tc.expectedIssue.Title, *returnedIssue.Title)
+			assert.Equal(t, *tc.expectedIssue.Body, *returnedIssue.Body)
+			assert.Equal(t, *tc.expectedIssue.State, *returnedIssue.State)
+			assert.Equal(t, *tc.expectedIssue.HTMLURL, *returnedIssue.HTMLURL)
+			assert.Equal(t, *tc.expectedIssue.User.Login, *returnedIssue.User.Login)
+		})
+	}
+}
