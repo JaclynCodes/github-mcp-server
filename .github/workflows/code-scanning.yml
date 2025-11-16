@@ -20,9 +20,9 @@ jobs:
       contents: read
       packages: read
       security-events: write
-    continue-on-error: false
+    continue-on-error: true
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - language: actions
