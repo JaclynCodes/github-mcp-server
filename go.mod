@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/google/go-github/v79 v79.0.0
 	github.com/josephburnett/jd v1.9.2
-	github.com/mark3labs/mcp-go v0.36.0
+	github.com/mark3labs/mcp-go v0.43.2
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/migueleliasweb/go-github-mock v1.3.0
 	github.com/spf13/cobra v1.10.1
@@ -37,7 +37,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0
-	github.com/google/go-querystring v1.1.0
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
